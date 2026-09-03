@@ -29,11 +29,12 @@ impl Log for Logger {
     fn flush(&self) {}
 }
 
-pub fn init(path: &std::path::Path, debug: bool) {
+/// `truncate`: the long-running service starts a fresh log; one-shot commands append.
+pub fn init(path: &std::path::Path, debug: bool, truncate: bool) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let file = File::create(path).ok();
+    let file = if truncate { File::create(path).ok() } else { std::fs::OpenOptions::new().append(true).create(true).open(path).ok() };
     let logger = Box::leak(Box::new(Logger { file: Mutex::new(file) }));
     let _ = log::set_logger(logger);
     log::set_max_level(if debug { LevelFilter::Debug } else { LevelFilter::Info });

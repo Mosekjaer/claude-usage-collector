@@ -104,6 +104,35 @@ subscription_usd = 0
 `claude-usage-collector scan --backfill 30` prints per-model totals per
 account without pushing anything.
 
+## Changing config
+
+Either edit `config.toml` by hand or use `set` / `add`. Both write the file;
+the running service only picks it up after `restart`.
+
+```
+claude-usage-collector accounts                     # what is configured right now
+claude-usage-collector set claude-5x.subscription_usd 0
+claude-usage-collector set antigravity.display "Google AI Pro"
+claude-usage-collector set codex.subscription_usd none   # back to auto-detect
+claude-usage-collector set days 7
+claude-usage-collector add "D:\profiles\client-x" --provider claude --display "Client X" --subscription-usd 100
+claude-usage-collector restart                      # Linux: systemctl --user restart; Windows: Task Scheduler
+```
+
+Keys for `set`: `interval_s`, `days`, `host`, `email`, `auto_discover`,
+`exclude` (comma separated), and per account `<label>.display`,
+`<label>.subscription_usd`, `<label>.provider`, `<label>.path`,
+`<label>.label`. `none` clears a value. Labels are the ones `accounts` prints;
+an auto-discovered account gets an explicit `[[accounts]]` entry the first time
+you `set` something on it.
+
+Manual restart, if you prefer:
+
+```
+systemctl --user restart claude-usage-collector            # Linux
+schtasks /end /tn ClaudeUsageCollector; schtasks /run /tn ClaudeUsageCollector   # Windows
+```
+
 ## Data model
 
 `users/{uid}/days/{YYYY-MM-DD}_{host}_{account}`:

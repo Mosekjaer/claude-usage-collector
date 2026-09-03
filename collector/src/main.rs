@@ -11,6 +11,7 @@ mod logger;
 mod paths;
 mod proto;
 mod provider;
+mod setcmd;
 mod stats;
 
 use std::collections::HashMap;
@@ -35,6 +36,17 @@ USAGE:
   claude-usage-collector login   [--config PATH]      sign in interactively, store refresh token
   claude-usage-collector accounts [--config PATH]     list discovered accounts
   claude-usage-collector scan [--backfill N]          print per-day totals without pushing
+  claude-usage-collector set KEY VALUE                edit config.toml (then `restart`)
+  claude-usage-collector add PATH [--provider P] [--display D] [--label L] [--subscription-usd N]
+  claude-usage-collector restart                      restart the background service
+
+SET KEYS:
+  interval_s, days, host, email, auto_discover, exclude (comma separated)
+  <label>.display, <label>.subscription_usd, <label>.provider, <label>.path, <label>.label
+  Use `none` to clear a value. Examples:
+    claude-usage-collector set claude-5x.subscription_usd 0
+    claude-usage-collector set antigravity.display \"Google AI Pro\"
+    claude-usage-collector set days 7
   claude-usage-collector init    [--config PATH]      write an example config.toml
   claude-usage-collector paths                        print config/state/log locations
 
@@ -47,6 +59,7 @@ OPTIONS:
 
 struct Args {
     cmd: String,
+    rest: Vec<String>,
     once: bool,
     backfill: Option<u32>,
     config: PathBuf,
@@ -54,11 +67,11 @@ struct Args {
 }
 
 fn parse_args() -> anyhow::Result<Args> {
-    let mut a = Args { cmd: "run".into(), once: false, backfill: None, config: paths::config_file(), debug: false };
+    let mut a = Args { cmd: "run".into(), rest: Vec::new(), once: false, backfill: None, config: paths::config_file(), debug: false };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
-            "run" | "login" | "accounts" | "init" | "paths" | "scan" => a.cmd = x,
+            "run" | "login" | "accounts" | "init" | "paths" | "scan" | "set" | "add" | "restart" => a.cmd = x,
             "--once" => a.once = true,
             "--debug" => a.debug = true,
             "--backfill" => a.backfill = Some(it.next().context("--backfill needs N")?.parse()?),
@@ -71,6 +84,7 @@ fn parse_args() -> anyhow::Result<Args> {
                 println!("{VERSION}");
                 std::process::exit(0);
             }
+            _ if matches!(a.cmd.as_str(), "set" | "add") => a.rest.push(x),
             other => bail!("unknown argument {other}\n{}", USAGE.replace("{VERSION}", VERSION)),
         }
     }
@@ -107,6 +121,7 @@ fn real_main() -> anyhow::Result<()> {
             println!("log:    {}", paths::log_file().display());
             return Ok(());
         }
+        "restart" => return setcmd::restart(),
         "init" => {
             if args.config.exists() {
                 bail!("{} already exists", args.config.display());
@@ -121,7 +136,7 @@ fn real_main() -> anyhow::Result<()> {
         _ => {}
     }
 
-    logger::init(&paths::log_file(), args.debug);
+    logger::init(&paths::log_file(), args.debug, args.cmd == "run" && !args.once);
     let cfg = Config::load(&args.config)
         .with_context(|| format!("no usable config at {} (run `claude-usage-collector init`)", args.config.display()))?;
     let home = paths::home_dir();
@@ -130,6 +145,30 @@ fn real_main() -> anyhow::Result<()> {
         "accounts" => {
             let accts = accounts::discover(&home, &cfg);
             print_accounts(&accts, &cfg.host());
+            Ok(())
+        }
+        "set" => {
+            let [key, value] = args.rest.as_slice() else {
+                bail!("usage: claude-usage-collector set KEY VALUE\n{}", USAGE.replace("{VERSION}", VERSION));
+            };
+            let mut cfg = cfg;
+            setcmd::set(&mut cfg, &args.config, &home, key, value)?;
+            println!("run `claude-usage-collector restart` to apply");
+            Ok(())
+        }
+        "add" => {
+            let Some((path, rest)) = args.rest.split_first() else {
+                bail!("usage: claude-usage-collector add PATH [--provider P] [--display D] [--label L] [--subscription-usd N]");
+            };
+            let mut opts = Vec::new();
+            let mut it = rest.iter();
+            while let Some(k) = it.next() {
+                let v = it.next().with_context(|| format!("{k} needs a value"))?;
+                opts.push((k.clone(), v.clone()));
+            }
+            let mut cfg = cfg;
+            setcmd::add(&mut cfg, &args.config, path, &opts)?;
+            println!("run `claude-usage-collector accounts` to check, then `claude-usage-collector restart`");
             Ok(())
         }
         "scan" => {
