@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude usage collector (pushes token stats to Firestore)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-usage-collector
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

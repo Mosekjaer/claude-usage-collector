@@ -1,0 +1,5 @@
+/target
+/.plans/*.html
+/.firebase
+*.log
+firebase-debug.log

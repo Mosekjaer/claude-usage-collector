@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude usage</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<main>
+  <div id="login" hidden>
+    <h1>Claude usage</h1>
+    <p class="muted">Sign in with the account you were given. No sign-up.</p>
+    <form id="login-form">
+      <input id="email" type="email" placeholder="email" autocomplete="username" required>
+      <input id="password" type="password" placeholder="password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Sign in</button>
+      <div id="login-error" class="error"></div>
+    </form>
+  </div>
+
+  <div id="app" hidden>
+    <header>
+      <h1>Claude usage</h1>
+      <div class="controls">
+        <select id="range"></select>
+        <button id="refresh" title="Reload from Firestore">Refresh</button>
+        <button id="logout">Log out</button>
+      </div>
+    </header>
+
+    <div class="cards">
+      <div class="card"><div class="label">API-equivalent, total</div><div class="value" id="c-api">–</div><div class="sub" id="c-api-sub"></div></div>
+      <div class="card"><div class="label">Paid (subscriptions)</div><div class="value" id="c-paid">–</div><div class="sub" id="c-paid-sub"></div></div>
+      <div class="card" id="c-saved-card"><div class="label">Saved vs API</div><div class="value" id="c-saved">–</div><div class="sub" id="c-saved-sub"></div></div>
+      <div class="card"><div class="label">Cache hit rate</div><div class="value" id="c-cache">–</div><div class="sub" id="c-cache-sub"></div></div>
+    </div>
+
+    <section>
+      <h2>Daily API-equivalent cost, stacked per person</h2>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </section>
+
+    <section>
+      <h2>People and accounts</h2>
+      <div class="table-wrap"><table id="people"></table></div>
+    </section>
+
+    <section>
+      <h2>Models</h2>
+      <div class="table-wrap"><table id="models"></table></div>
+    </section>
+
+    <footer id="footer"></footer>
+  </div>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

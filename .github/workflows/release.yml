@@ -1,0 +1,43 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: claude-usage-collector-linux-x86_64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: claude-usage-collector-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package (linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/claude-usage-collector
+          cp target/${{ matrix.target }}/release/claude-usage-collector dist/claude-usage-collector/
+          cp deploy/linux/install.sh deploy/linux/claude-usage-collector.service README.md dist/claude-usage-collector/
+          tar -C dist -czf ${{ matrix.asset }} claude-usage-collector
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/claude-usage-collector.exe dist/
+          Copy-Item deploy/windows/install.ps1, deploy/windows/uninstall.ps1, README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.asset }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}

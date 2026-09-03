@@ -1,0 +1,28 @@
+[package]
+name = "claude-usage-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pushes Claude Code token usage from local transcripts to Firestore"
+
+[[bin]]
+name = "claude-usage-collector"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+hostname = "0.4"
+log = "0.4"
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+ureq = { version = "2", features = ["json"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+
+[dev-dependencies]
+tempfile = "3"
