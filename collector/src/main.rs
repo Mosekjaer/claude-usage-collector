@@ -1,11 +1,16 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod accounts;
+mod antigravity;
 mod auth;
+mod claude;
+mod codex;
 mod config;
 mod firestore;
 mod logger;
 mod paths;
+mod proto;
+mod provider;
 mod stats;
 
 use std::collections::HashMap;
@@ -28,7 +33,8 @@ claude-usage-collector {VERSION}
 USAGE:
   claude-usage-collector [run] [--once] [--backfill N] [--config PATH] [--debug]
   claude-usage-collector login   [--config PATH]      sign in interactively, store refresh token
-  claude-usage-collector accounts [--config PATH]     list discovered Claude accounts
+  claude-usage-collector accounts [--config PATH]     list discovered accounts
+  claude-usage-collector scan [--backfill N]          print per-day totals without pushing
   claude-usage-collector init    [--config PATH]      write an example config.toml
   claude-usage-collector paths                        print config/state/log locations
 
@@ -52,7 +58,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
-            "run" | "login" | "accounts" | "init" | "paths" => a.cmd = x,
+            "run" | "login" | "accounts" | "init" | "paths" | "scan" => a.cmd = x,
             "--once" => a.once = true,
             "--debug" => a.debug = true,
             "--backfill" => a.backfill = Some(it.next().context("--backfill needs N")?.parse()?),
@@ -126,6 +132,27 @@ fn real_main() -> anyhow::Result<()> {
             print_accounts(&accts, &cfg.host());
             Ok(())
         }
+        "scan" => {
+            let accts = accounts::discover(&home, &cfg);
+            let days = args.backfill.unwrap_or(cfg.days).max(1);
+            let from = Local::now().date_naive() - chrono::Duration::days(i64::from(days) - 1);
+            for a in &accts {
+                let mut sc = Scanner::default();
+                let agg = sc.scan(&a.data_roots(), a.file_ext(), from, a.parse_fn())?;
+                println!("== {} ({}) files={} parsed={}", a.label, a.provider.as_str(), sc.files_seen_last_scan, sc.files_parsed_last_scan);
+                let mut tot: std::collections::BTreeMap<String, stats::ModelTotals> = Default::default();
+                for (_, models) in &agg {
+                    for (m, t) in models {
+                        tot.entry(m.clone()).or_default().add(t);
+                    }
+                }
+                for (m, t) in &tot {
+                    println!("  {:<24} replies={:<6} in={:<10} cache_r={:<11} cache_w={:<9} out={}", m, t.replies, t.input, t.cache_read, t.cache_write_5m + t.cache_write_1h, t.output);
+                }
+                println!("  days with usage: {}", agg.len());
+            }
+            Ok(())
+        }
         "login" => {
             let state_path = paths::state_file();
             let mut state = State::load(&state_path);
@@ -150,15 +177,16 @@ fn print_accounts(accts: &[Account], host: &str) {
         println!("no accounts found (no ~/.claude*/projects and no [[accounts]] in config)");
         return;
     }
-    println!("{:<14} {:<22} {:<12} {:<26} {:>6}  path", "label", "display", "type", "tier", "usd");
+    println!("{:<14} {:<12} {:<22} {:<10} {:<26} {:>6}  path", "label", "provider", "display", "type", "tier", "usd");
     for a in accts {
         let (kind, tier, usd) = match &a.subscription {
             Some(s) => (s.kind.as_str(), s.tier.as_str(), s.usd.map(|u| format!("${u}")).unwrap_or_else(|| "?".into())),
             None => ("-", "-", "?".into()),
         };
         println!(
-            "{:<14} {:<22} {:<12} {:<26} {:>6}  {}",
+            "{:<14} {:<12} {:<22} {:<10} {:<26} {:>6}  {}",
             a.label,
+            a.provider.as_str(),
             a.display.as_deref().unwrap_or("-"),
             kind,
             tier,
@@ -239,7 +267,7 @@ fn run(cfg: &Config, args: &Args, home: &Path) -> anyhow::Result<()> {
             let from = today - chrono::Duration::days(i64::from(days) - 1);
             for a in &accts {
                 let sc = scanners.entry(a.dir.clone()).or_default();
-                let agg = match sc.scan(&a.projects_dir(), from) {
+                let agg = match sc.scan(&a.data_roots(), a.file_ext(), from, a.parse_fn()) {
                     Ok(x) => x,
                     Err(e) => {
                         log::warn!("{}: {e:#}", a.label);
@@ -257,7 +285,7 @@ fn run(cfg: &Config, args: &Args, home: &Path) -> anyhow::Result<()> {
                     // day is re-pushed on the next loop iteration anyway.
                     let mut ok = false;
                     for attempt in 0..2 {
-                        match client.put_day(&s.uid, &host, &a.label, *date, models) {
+                        match client.put_day(&s.uid, &host, &a.label, a.provider.as_str(), *date, models) {
                             Ok(()) => {
                                 ok = true;
                                 break;

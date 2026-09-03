@@ -1,10 +1,25 @@
 # claude-usage-collector
 
-Shared dashboard for a small team on Claude Max subscriptions. A tiny daemon on
-each machine (Linux, Windows) reads the Claude Code transcripts in every Claude
-config dir it can find, pushes raw per-day / per-model token counts to
+Shared dashboard for a small team on AI coding subscriptions. A tiny daemon on
+each machine (Linux, Windows) reads the local session logs of Claude Code,
+Codex CLI and Antigravity, pushes raw per-day / per-model token counts to
 Firestore, and a static web app prices them at API rates against what the
 subscriptions actually cost.
+
+| Provider | Data read | Subscription |
+|---|---|---|
+| Claude Code | `~/.claude*/projects/**/*.jsonl` (`assistant` messages with `usage`) | derived from `.credentials.json` (Pro $20, Max 5× $100, Max 20× $200) |
+| Codex CLI | `~/.codex/sessions/**/*.jsonl` (`token_count` events, deltas of the cumulative counter) | derived from `rate_limits.plan_type` (plus $20, pro $200, free $0) |
+| Antigravity IDE + CLI | `~/.gemini/antigravity*/conversations/*.db` (SQLite, `gen_metadata` protobuf blobs) | not on disk; set `subscription_usd` |
+
+Antigravity has no documented usage log. The `gen_metadata` blob layout was
+reverse-engineered (see `collector/src/antigravity.rs`): field 1.4 holds
+uncached input (2), cached input (5) and output (3 = reasoning 9 + text 10)
+token counts, 1.21 the model display name, 1.9.4.1 the timestamp. Verified on
+534 generations; treat the numbers as best-effort.
+
+Gemini CLI is not supported: personal OAuth was retired in favour of
+Antigravity, and its session files carry no token counts.
 
 Dashboard: https://claude-usage-collector-fm.web.app
 
@@ -67,17 +82,34 @@ path    = "~/.claude-5x"
 display = "Max 5x"
 ```
 
-Each account is one Claude config dir. The subscription price is derived from
-`<dir>/.credentials.json` (`subscriptionType` + `rateLimitTier`: Pro $20,
-Max 5× $100, Max 20× $200). Unknown tiers show as `?`; set `subscription_usd`
-on the account to override.
+Each account is one provider config dir (`provider` is detected from the
+layout: `projects/` → claude, `sessions/` → codex, `antigravity*/conversations/`
+→ antigravity; set it explicitly for other paths). Subscription prices are
+derived where possible (see table above); unknown ones show as `?`. Set
+`subscription_usd` on the account to override, including `0` when someone
+else pays.
+
+```toml
+[[accounts]]
+path = "~/.codex"
+display = "ChatGPT Plus"
+
+[[accounts]]
+path = "~/.gemini"
+provider = "antigravity"
+display = "Google AI Pro"
+subscription_usd = 0
+```
+
+`claude-usage-collector scan --backfill 30` prints per-model totals per
+account without pushing anything.
 
 ## Data model
 
 `users/{uid}/days/{YYYY-MM-DD}_{host}_{account}`:
 
 ```json
-{ "date": "2026-09-03", "host": "laptop", "account": "claude", "updatedAt": "...",
+{ "date": "2026-09-03", "host": "laptop", "account": "claude", "provider": "claude", "updatedAt": "...",
   "models": { "claude-fable-5-1": { "input": 1312, "output": 48210, "cache_read": 9812331,
                                      "cache_write_5m": 0, "cache_write_1h": 401220, "replies": 143 } } }
 ```
@@ -93,8 +125,12 @@ the console.
 ## Web app
 
 Static files in `web/`, hosted on Firebase Hosting. Prices live in
-`web/pricing.js` (mirror of the COSMIC applet's `pricing.rs`); update there
-and `firebase deploy --only hosting`.
+`web/pricing.js` (Anthropic, OpenAI GPT-5.5/5.6, Gemini 3.x Pro; longest
+model-id prefix wins); update there and `firebase deploy --only hosting`.
+
+The Firebase web API key in `web/app.js` is a public client identifier, not a
+secret: it is restricted to Identity Toolkit, Secure Token and Firestore, and
+access is governed by Firestore rules plus disabled sign-up.
 
 ## Development
 

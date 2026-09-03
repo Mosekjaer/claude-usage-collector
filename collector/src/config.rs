@@ -31,6 +31,9 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct AccountConfig {
     pub path: String,
+    /// claude | codex | antigravity. Default: detected from the directory layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<crate::provider::Provider>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,12 +98,15 @@ days       = 3           # how many local days are re-pushed each run
 # host = "my-pc"         # default: OS hostname
 # exclude = ["claude-test"]
 
-# Auto-discovery finds ~/.claude* dirs containing projects/ plus $CLAUDE_CONFIG_DIR.
-# Set to false to only use the [[accounts]] list below.
+# Auto-discovery finds ~/.claude* dirs containing projects/ plus $CLAUDE_CONFIG_DIR
+# (provider "claude"), ~/.codex with sessions/ ("codex") and ~/.gemini with
+# antigravity*/conversations/ ("antigravity"). Set to false to only use the
+# [[accounts]] list below.
 auto_discover = true
 
 # Any number of accounts, anywhere on disk. `label` is the Firestore key
-# (default: dir name without leading dot), `display` is the dashboard name.
+# (default: dir name without leading dot), `display` is the dashboard name,
+# `provider` is claude | codex | antigravity (default: detected from layout).
 # [[accounts]]
 # path    = "~/.claude"
 # display = "Max 20x (private)"
@@ -108,6 +114,13 @@ auto_discover = true
 # [[accounts]]
 # path    = "~/.claude-5x"
 # display = "Max 5x (work)"
+# subscription_usd = 0     # someone else pays
+#
+# [[accounts]]
+# path     = "~/.gemini"
+# provider = "antigravity"
+# display  = "Google AI Pro"
+# subscription_usd = 0     # 18 months for $1.50 -> effectively 0/month
 #
 # [[accounts]]
 # path             = 'D:\claude-profiles\client-x'

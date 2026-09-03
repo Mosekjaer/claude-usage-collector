@@ -8,12 +8,14 @@ use serde::Deserialize;
 
 use crate::config::Config;
 use crate::paths;
+use crate::provider::Provider;
 
 #[derive(Debug, Clone)]
 pub struct Account {
     pub label: String,
     pub display: Option<String>,
     pub dir: PathBuf,
+    pub provider: Provider,
     pub subscription: Option<Subscription>,
 }
 
@@ -25,8 +27,28 @@ pub struct Subscription {
 }
 
 impl Account {
-    pub fn projects_dir(&self) -> PathBuf {
-        self.dir.join("projects")
+    /// Directories that hold this provider's data files.
+    pub fn data_roots(&self) -> Vec<PathBuf> {
+        match self.provider {
+            Provider::Claude => vec![self.dir.join("projects")],
+            Provider::Codex => vec![self.dir.join("sessions")],
+            Provider::Antigravity => crate::antigravity::data_roots(&self.dir),
+        }
+    }
+
+    pub fn file_ext(&self) -> &'static str {
+        match self.provider {
+            Provider::Claude | Provider::Codex => "jsonl",
+            Provider::Antigravity => "db",
+        }
+    }
+
+    pub fn parse_fn(&self) -> crate::stats::ParseFn {
+        match self.provider {
+            Provider::Claude => crate::claude::parse_file,
+            Provider::Codex => crate::codex::parse_file,
+            Provider::Antigravity => crate::antigravity::parse_db,
+        }
     }
 }
 
@@ -37,66 +59,83 @@ pub fn discover(home: &Path, cfg: &Config) -> Vec<Account> {
     let mut out: Vec<Account> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
-    let mut push = |dir: PathBuf, label: Option<&str>, display: Option<&str>, usd_override: Option<u32>| {
+    let mut push = |dir: PathBuf, provider: Option<Provider>, label: Option<&str>, display: Option<&str>, usd_override: Option<u32>| {
         let canon = fs::canonicalize(&dir).unwrap_or(dir.clone());
         if !seen.insert(canon.clone()) {
             return;
         }
-        let label = label
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| default_label(&canon));
+        let Some(provider) = provider.or_else(|| Provider::detect(&canon)) else {
+            log::warn!("{}: cannot tell which provider this is (no projects/, sessions/ or antigravity*/conversations/); set `provider`", canon.display());
+            return;
+        };
+        let label = label.map(|s| s.to_string()).unwrap_or_else(|| default_label(&canon, provider));
         let label = paths::sanitize_label(&label);
         if cfg.exclude.iter().any(|e| e == &label) {
             return;
         }
-        let mut subscription = read_subscription(&canon);
+        let mut subscription = read_subscription(&canon, provider);
         if let Some(usd) = usd_override {
             let s = subscription.get_or_insert(Subscription { kind: "manual".into(), tier: "manual".into(), usd: None });
             s.usd = Some(usd);
         }
-        out.push(Account { label, display: display.map(|s| s.to_string()), dir: canon, subscription });
+        out.push(Account { label, display: display.map(|s| s.to_string()), dir: canon, provider, subscription });
     };
 
     for a in &cfg.accounts {
         let dir = paths::expand(&a.path);
-        push(dir, a.label.as_deref(), a.display.as_deref(), a.subscription_usd);
+        push(dir, a.provider, a.label.as_deref(), a.display.as_deref(), a.subscription_usd);
     }
 
     if cfg.auto_discover {
         if let Ok(v) = std::env::var("CLAUDE_CONFIG_DIR") {
             if !v.is_empty() {
-                push(paths::expand(&v), None, None, None);
+                push(paths::expand(&v), Some(Provider::Claude), None, None, None);
             }
         }
-        let mut candidates: Vec<PathBuf> = Vec::new();
+        let mut candidates: Vec<(PathBuf, Provider)> = Vec::new();
         if let Ok(rd) = fs::read_dir(home) {
             for e in rd.flatten() {
                 let p = e.path();
                 let name = e.file_name().to_string_lossy().to_string();
-                if name.starts_with(".claude") && p.is_dir() && p.join("projects").is_dir() {
-                    candidates.push(p);
+                if !p.is_dir() {
+                    continue;
+                }
+                if name.starts_with(".claude") && p.join("projects").is_dir() {
+                    candidates.push((p, Provider::Claude));
+                } else if name == ".codex" && p.join("sessions").is_dir() {
+                    candidates.push((p, Provider::Codex));
+                } else if name == ".gemini"
+                    && (p.join("antigravity").join("conversations").is_dir() || p.join("antigravity-cli").join("conversations").is_dir())
+                {
+                    candidates.push((p, Provider::Antigravity));
                 }
             }
         }
-        candidates.sort();
-        for p in candidates {
-            push(p, None, None, None);
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        for (p, prov) in candidates {
+            push(p, Some(prov), None, None, None);
         }
     }
 
     out.retain(|a| {
-        let ok = a.projects_dir().is_dir();
+        let ok = a.data_roots().iter().any(|r| r.is_dir());
         if !ok {
-            log::warn!("account {}: {} has no projects/ dir, skipping", a.label, a.dir.display());
+            log::warn!("account {}: no data dir under {} for provider {}, skipping", a.label, a.dir.display(), a.provider.as_str());
         }
         ok
     });
     out
 }
 
-fn default_label(dir: &Path) -> String {
-    let name = dir.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "claude".into());
-    name.trim_start_matches('.').to_string()
+fn default_label(dir: &Path, provider: Provider) -> String {
+    let name = dir.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let name = name.trim_start_matches('.').to_string();
+    match (provider, name.as_str()) {
+        (Provider::Antigravity, "gemini") | (Provider::Antigravity, "") => "antigravity".into(),
+        (Provider::Codex, "") => "codex".into(),
+        (Provider::Claude, "") => "claude".into(),
+        _ => name,
+    }
 }
 
 #[derive(Deserialize)]
@@ -113,9 +152,22 @@ struct Oauth {
     rate_limit_tier: Option<String>,
 }
 
+pub fn read_subscription(dir: &Path, provider: Provider) -> Option<Subscription> {
+    match provider {
+        Provider::Claude => read_claude_subscription(dir),
+        Provider::Codex => {
+            let plan = crate::codex::read_plan_type(&dir.join("sessions"))?;
+            let usd = crate::codex::plan_usd(&plan);
+            Some(Subscription { kind: "chatgpt".into(), tier: plan, usd })
+        }
+        // Google AI Pro/Ultra: nothing on disk says which; set subscription_usd in config.
+        Provider::Antigravity => None,
+    }
+}
+
 /// Reads <dir>/.credentials.json → claudeAiOauth.{subscriptionType, rateLimitTier}.
 /// The access/refresh tokens in that file are never read into a struct.
-pub fn read_subscription(dir: &Path) -> Option<Subscription> {
+fn read_claude_subscription(dir: &Path) -> Option<Subscription> {
     let s = fs::read_to_string(dir.join(".credentials.json")).ok()?;
     let f: CredFile = serde_json::from_str(&s).ok()?;
     let o = f.oauth?;
@@ -157,24 +209,33 @@ mod tests {
         fs::create_dir_all(home.join(".claude-nope")).unwrap(); // no projects/ → ignored
         let ext = home.join("elsewhere").join("work");
         mk(&ext, None);
+        fs::create_dir_all(home.join(".codex").join("sessions")).unwrap();
+        fs::create_dir_all(home.join(".gemini").join("antigravity").join("conversations")).unwrap();
+        fs::create_dir_all(home.join(".gemini").join("antigravity-cli").join("conversations")).unwrap();
 
         let cfg = Config {
             exclude: vec!["claude-test".into()],
             accounts: vec![
-                AccountConfig { path: ext.to_string_lossy().to_string(), label: None, display: Some("Work".into()), subscription_usd: Some(100) },
-                AccountConfig { path: home.join(".claude").to_string_lossy().to_string(), label: None, display: Some("Private".into()), subscription_usd: None },
+                AccountConfig { path: ext.to_string_lossy().to_string(), provider: None, label: None, display: Some("Work".into()), subscription_usd: Some(100) },
+                AccountConfig { path: home.join(".claude").to_string_lossy().to_string(), provider: None, label: None, display: Some("Private".into()), subscription_usd: None },
+                AccountConfig { path: home.join(".gemini").to_string_lossy().to_string(), provider: Some(Provider::Antigravity), label: None, display: Some("Google AI Pro".into()), subscription_usd: Some(0) },
             ],
             ..Default::default()
         };
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let accts = discover(home, &cfg);
         let labels: Vec<&str> = accts.iter().map(|a| a.label.as_str()).collect();
-        assert_eq!(labels, vec!["work", "claude", "claude-5x"]);
+        assert_eq!(labels, vec!["work", "claude", "antigravity", "claude-5x", "codex"]);
         assert_eq!(accts[0].subscription.as_ref().unwrap().usd, Some(100));
+        assert_eq!(accts[0].provider, Provider::Claude);
         assert_eq!(accts[1].display.as_deref(), Some("Private"));
         assert_eq!(accts[1].subscription.as_ref().unwrap().usd, Some(200));
-        assert_eq!(accts[2].subscription.as_ref().unwrap().usd, Some(100));
-        assert_eq!(accts[2].display, None);
+        assert_eq!(accts[2].provider, Provider::Antigravity);
+        assert_eq!(accts[2].subscription.as_ref().unwrap().usd, Some(0));
+        assert_eq!(accts[3].subscription.as_ref().unwrap().usd, Some(100));
+        assert_eq!(accts[3].display, None);
+        assert_eq!(accts[4].provider, Provider::Codex);
+        assert!(accts[4].subscription.is_none(), "no rollouts yet -> unknown plan");
     }
 
     #[test]

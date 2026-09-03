@@ -78,6 +78,7 @@ impl<'a> Client<'a> {
         uid: &str,
         host: &str,
         account: &str,
+        provider: &str,
         date: NaiveDate,
         models: &BTreeMap<String, ModelTotals>,
     ) -> anyhow::Result<()> {
@@ -90,6 +91,7 @@ impl<'a> Client<'a> {
         f.insert("date".into(), string(&date.to_string()));
         f.insert("host".into(), string(host));
         f.insert("account".into(), string(account));
+        f.insert("provider".into(), string(provider));
         f.insert("updatedAt".into(), json!({ "timestampValue": Utc::now().to_rfc3339() }));
         f.insert("models".into(), map(m));
         self.patch(&name, f, &[])
@@ -109,6 +111,7 @@ impl<'a> Client<'a> {
         let mut a = Map::new();
         a.insert("label".into(), string(&account.label));
         a.insert("host".into(), string(host));
+        a.insert("provider".into(), string(account.provider.as_str()));
         if let Some(d) = &account.display {
             a.insert("display".into(), string(d));
         }

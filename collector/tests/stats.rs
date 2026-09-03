@@ -5,6 +5,8 @@ use chrono::Local;
 
 #[path = "../src/stats.rs"]
 mod stats;
+#[path = "../src/claude.rs"]
+mod claude;
 
 fn fixture_root() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
@@ -29,7 +31,7 @@ fn dedups_buckets_and_caches() {
     let mut sc = stats::Scanner::default();
 
     // Window covering only the last 3 days: the 8-day-old line is excluded.
-    let agg = sc.scan(&root, today - chrono::Duration::days(2)).unwrap();
+    let agg = sc.scan(&[root.clone()], "jsonl", today - chrono::Duration::days(2), claude::parse_file).unwrap();
     assert_eq!(sc.files_parsed_last_scan, 1);
     let t = &agg[&today];
     let opus = &t["claude-opus-5"];
@@ -45,7 +47,7 @@ fn dedups_buckets_and_caches() {
     assert!(!agg.contains_key(&old));
 
     // 30-day window includes the old day.
-    let agg = sc.scan(&root, today - chrono::Duration::days(29)).unwrap();
+    let agg = sc.scan(&[root.clone()], "jsonl", today - chrono::Duration::days(29), claude::parse_file).unwrap();
     assert_eq!(sc.files_parsed_last_scan, 0, "unchanged file is not re-parsed");
     assert_eq!(agg[&old]["claude-haiku-4-5"].input, 1000);
 }

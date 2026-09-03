@@ -1,7 +1,9 @@
-// API-equivalent pricing, USD per million tokens. Source: Anthropic price list
-// as of 2026-06-24. Mirror of cosmic-ext-applet-claude-usage/src/pricing.rs.
-// Longest matching model-id prefix wins.
-export const PRICING_DATE = '2026-06-24';
+// API-equivalent pricing, USD per million tokens. Longest matching model-id
+// prefix wins. Sources: Anthropic price list 2026-06-24 (mirror of
+// cosmic-ext-applet-claude-usage/src/pricing.rs); OpenAI GPT-5.5/5.6 list
+// prices as of 2026-08-21 (cached input = 10 % of input, no cache-write fee);
+// Gemini 3.1 Pro list price (<=200k context; cache read $0.20, write $0.375).
+export const PRICING_DATE = '2026-08-21';
 
 const p = (input, output, cacheRead, cacheWrite5m, cacheWrite1h) => ({ input, output, cache_read: cacheRead, cache_write_5m: cacheWrite5m, cache_write_1h: cacheWrite1h });
 
@@ -17,7 +19,17 @@ export const TABLE = [
   ['claude-sonnet-5', p(2.0, 10.0, 0.2, 2.5, 4.0)],
   ['claude-sonnet-4-6', p(3.0, 15.0, 0.3, 3.75, 6.0)],
   ['claude-haiku-4-5', p(1.0, 5.0, 0.1, 1.25, 2.0)],
+  // OpenAI (Codex CLI). cache_write columns are 0: no cache-write charge.
+  ['gpt-5.6-sol', p(5.0, 30.0, 0.5, 0, 0)],
+  ['gpt-5.6-terra', p(2.0, 12.0, 0.2, 0, 0)],
+  ['gpt-5.6-luna', p(0.2, 1.2, 0.02, 0, 0)],
+  ['gpt-5.5', p(5.0, 30.0, 0.5, 0, 0)],
+  // Google (Antigravity). Model ids are normalised display names.
+  ['gemini-3-1-pro', p(2.0, 12.0, 0.2, 0.375, 0.375)],
+  ['gemini-3-pro', p(2.0, 12.0, 0.2, 0.375, 0.375)],
 ];
+
+export const PROVIDER_LABEL = { claude: 'Claude Code', codex: 'Codex CLI', antigravity: 'Antigravity' };
 
 export function lookup(model) {
   let best = null;

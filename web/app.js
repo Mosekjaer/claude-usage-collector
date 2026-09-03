@@ -1,4 +1,4 @@
-import { costUsd, PRICING_DATE } from './pricing.js';
+import { costUsd, PRICING_DATE, PROVIDER_LABEL } from './pricing.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDWc8AdeuuvYPjY0i12TajgsY5uJjKGZmQ',
@@ -86,9 +86,9 @@ async function loadRange(range) {
     const perAccount = {};   // "host/label" -> { models, days:Set }
     const all = {};
     for (const d of days.docs) {
-      const { date, host, account, models } = d.data();
+      const { date, host, account, provider, models } = d.data();
       const key = `${host}/${account}`;
-      const acc = (perAccount[key] ??= { models: {}, days: new Set() });
+      const acc = (perAccount[key] ??= { models: {}, days: new Set(), provider: provider ?? 'claude' });
       acc.days.add(date);
       for (const [model, t] of Object.entries(models ?? {})) {
         addTotals((perDay[date] ??= {}), model, t);
@@ -151,7 +151,7 @@ function render(users, range) {
   try { renderChart(users, range, paid); } catch (e) { console.error('chart', e); }
   renderPeople(users, range);
   renderModels(all);
-  $('footer').textContent = `Prices: Anthropic price list ${PRICING_DATE}. Unknown models shown as "?"` +
+  $('footer').textContent = `Prices: Anthropic / OpenAI / Google list prices as of ${PRICING_DATE}. Unknown models shown as "?"` +
     (unknownModels.size ? ` (${[...unknownModels].join(', ')})` : '') + '. Days are local dates on the machine that collected them.';
 }
 
@@ -199,8 +199,10 @@ function renderPeople(users, range) {
       const [host, label] = key.split('/');
       const models = pa?.models ?? {}; const pp = priceModels(models); const tt = sumModels(models);
       const ttok = tt.input + tt.output + tt.cache_read + tt.cache_write_5m + tt.cache_write_1h;
+      const provider = a.provider ?? pa?.provider ?? 'claude';
       const name = a.display || label;
-      const tier = a.tier ? `<span class="badge">${esc(a.subscription ?? '')} ${esc(a.tier.replace(/^default_claude_/, ''))}</span>` : '';
+      const tierTxt = a.tier ? `${a.subscription ?? ''} ${a.tier.replace(/^default_claude_/, '')}`.trim() : '';
+      const tier = `<span class="badge">${esc(PROVIDER_LABEL[provider] ?? provider)}${tierTxt ? ' · ' + esc(tierTxt) : ''}</span>`;
       const sub = a.subscriptionUsd == null ? '?' : fmtUsd(range.monthly ? a.subscriptionUsd : a.subscriptionUsd * ((new Date(range.to) - new Date(range.from)) / 86400000 + 1) / 30);
       rows.push(`<tr class="sub"><td></td><td class="l">${esc(name)} ${tier}</td><td class="l mono">${esc(host)}</td><td class="l">${ago(a.lastPush)}</td><td>${fmtInt(tt.replies)}</td><td>${fmtTok(ttok)}</td><td>${cacheHit(tt) == null ? '–' : Math.round(cacheHit(tt) * 100) + ' %'}</td><td>${fmtUsd(pp.usd)}</td><td>${sub}</td><td></td></tr>`);
     }
@@ -209,11 +211,12 @@ function renderPeople(users, range) {
   $('people').innerHTML = rows.join('');
 }
 
+const modelVendor = (m) => m.startsWith('claude-') ? 'Anthropic' : m.startsWith('gpt-') || m.startsWith('o') && /^o\d/.test(m) ? 'OpenAI' : m.startsWith('gemini-') ? 'Google' : '';
 function renderModels(all) {
-  const rows = [`<tr><th class="l">Model</th><th>Replies</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write 5m</th><th>Cache write 1h</th><th>API-equivalent</th></tr>`];
+  const rows = [`<tr><th class="l">Model</th><th class="l">Vendor</th><th>Replies</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write 5m</th><th>Cache write 1h</th><th>API-equivalent</th></tr>`];
   const entries = Object.entries(all).map(([m, t]) => [m, t, costUsd(m, t)]).sort((a, b) => (b[2] ?? -1) - (a[2] ?? -1));
   for (const [m, t, c] of entries) {
-    rows.push(`<tr><td class="l mono">${esc(m)}</td><td>${fmtInt(t.replies)}</td><td>${fmtTok(t.input)}</td><td>${fmtTok(t.output)}</td><td>${fmtTok(t.cache_read)}</td><td>${fmtTok(t.cache_write_5m)}</td><td>${fmtTok(t.cache_write_1h)}</td><td>${c == null ? '?' : fmtUsd(c)}</td></tr>`);
+    rows.push(`<tr><td class="l mono">${esc(m)}</td><td class="l muted">${modelVendor(m)}</td><td>${fmtInt(t.replies)}</td><td>${fmtTok(t.input)}</td><td>${fmtTok(t.output)}</td><td>${fmtTok(t.cache_read)}</td><td>${fmtTok(t.cache_write_5m)}</td><td>${fmtTok(t.cache_write_1h)}</td><td>${c == null ? '?' : fmtUsd(c)}</td></tr>`);
   }
   $('models').innerHTML = rows.join('');
 }

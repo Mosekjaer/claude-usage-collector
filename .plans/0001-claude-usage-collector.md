@@ -156,7 +156,12 @@ sequenceDiagram
 + Cargo.toml                                  # workspace: members = ["collector"]
 + collector/Cargo.toml                        # bin claude-usage-collector; ureq(rustls), serde, serde_json, chrono, anyhow, dirs, toml, log, env_logger, hostname
 + collector/src/main.rs                       # CLI: run | --once | --backfill N | login | accounts | --config PATH
-+ collector/src/stats.rs                      # port af applet'ens stats.rs: Scanner, ModelTotals, parse_file, dedup
++ collector/src/stats.rs                      # generisk Scanner med (mtime,len)-cache; ModelTotals, Days
++ collector/src/provider.rs                   # Provider enum + layout-detektion
++ collector/src/claude.rs                     # Claude Code jsonl-parser (port af applet'ens stats.rs)
++ collector/src/codex.rs                      # Codex CLI rollout-parser + plan_type
++ collector/src/proto.rs                      # minimal protobuf wire-reader
++ collector/src/antigravity.rs                # SQLite gen_metadata → usage
 + collector/src/config.rs                     # config.toml (api_key, project_id, email, password?, interval_s, days) + state.json (refresh_token, uid)
 + collector/src/auth.rs                       # signInWithPassword, refresh, idToken-cache
 + collector/src/firestore.rs                  # Document-JSON encoding (integerValue som string), PATCH med updateMask
@@ -396,6 +401,26 @@ Mappingen `default_claude_max_20x` → $200 er udledt af den samme streng applet
 
 ```callout risk Pristabel drifter fra virkeligheden
 Tabellen er dateret 2026-06-24. Prisændringer kræver manuel opdatering af `web/pricing.js` (og applet'ens `pricing.rs`). Dashboard viser datoen i footeren, så det er synligt hvor gamle priserne er.
+```
+
+## v0.2: Codex CLI og Antigravity
+
+Samme collector, tre providers. `[[accounts]]` får `provider = "claude" | "codex" | "antigravity"` (auto-detekteret fra mappelayout), auto-discovery finder også `~/.codex` og `~/.gemini`.
+
+```callout decision Codex: deltaer af den kumulative tæller
+`~/.codex/sessions/**/*.jsonl` har `event_msg`/`token_count` med både `total_token_usage` (kumulativ pr. session) og `last_token_usage`. Vi bruger delta af den kumulative, så et gentaget event aldrig tæller dobbelt; går tælleren baglæns bruges `last`. `cached_input_tokens` er delmængde af `input_tokens` og prises som cache read; `reasoning_output_tokens` er delmængde af `output_tokens` og prises som output. Model fra `turn_context`. Abonnement fra `rate_limits.plan_type` (plus $20, pro $200, free $0).
+```
+
+```callout decision Antigravity: reverse-engineeret protobuf i SQLite
+`~/.gemini/antigravity*/conversations/*.db`, tabel `gen_metadata`, én blob pr. generation. Layout fastslået empirisk på 534 rækker: `1.4.{2,5,3}` = uncached input, cached input, output (3 = 9 + 10 holdt i 534/534 rækker), `1.21` model-displaynavn, `1.9.4.1` unix-timestamp. Læses read-only med `rusqlite` (bundled). Modelnavne normaliseres (`Gemini 3.1 Pro (High)` → `gemini-3-1-pro`, `Claude Opus 4.6 (Thinking)` → `claude-opus-4-6`). Abonnement (Google AI Pro) findes ikke på disk; sættes med `subscription_usd`.
+```
+
+```callout decision Gemini CLI droppes
+Personal OAuth afvises af Google ("migrate to Antigravity"), og session-filerne har ingen token-tal. Lokal OTEL-telemetry ville kræve opsætning på hver maskine for et værktøj der ikke længere virker med abonnementet.
+```
+
+```callout risk Antigravity-layoutet er udokumenteret
+Google kan ændre proto-felterne uden varsel. Symptom: `scan` viser 0 replies for antigravity eller urealistiske tal. Fixture-testen (`decodes_real_blob`) fanger kun regressioner i vores dekoder, ikke ændringer hos Google.
 ```
 
 ## Åbne spørgsmål
